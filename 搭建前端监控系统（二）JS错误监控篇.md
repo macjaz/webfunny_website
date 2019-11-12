@@ -41,39 +41,38 @@
 
 为了得到这些数据，我们需要在上传的时候将其分析出来。在众多日志分析中，很多字段及功能是重复通用的，所以应该将其封装起来。
 
-复制代码
-// 设置日志对象类的通用属性
-  function setCommonProperty() {
-    this.happenTime = new Date().getTime(); // 日志发生时间
-    this.webMonitorId = WEB_MONITOR_ID;     // 用于区分应用的唯一标识（一个项目对应一个）
-    this.simpleUrl =  window.location.href.split('?')[0].replace('#', ''); // 页面的url
-    this.customerKey = utils.getCustomerKey(); // 用于区分用户，所对应唯一的标识，清理本地数据后失效
-    this.pageKey = utils.getPageKey();  // 用于区分页面，所对应唯一的标识，每个新页面对应一个值
-    this.deviceName = DEVICE_INFO.deviceName;
-    this.os = DEVICE_INFO.os + (DEVICE_INFO.osVersion ? " " + DEVICE_INFO.osVersion : "");
-    this.browserName = DEVICE_INFO.browserName;
-    this.browserVersion = DEVICE_INFO.browserVersion;
-    // TODO 位置信息, 待处理
-    this.monitorIp = "";  // 用户的IP地址
-    this.country = "china";  // 用户所在国家
-    this.province = "";  // 用户所在省份
-    this.city = "";  // 用户所在城市
-    // 用户自定义信息， 由开发者主动传入， 便于对线上进行准确定位
-    this.userId = USER_INFO.userId;
-    this.firstUserParam = USER_INFO.firstUserParam;
-    this.secondUserParam = USER_INFO.secondUserParam;
-  }
+    // 设置日志对象类的通用属性
+    function setCommonProperty() {
+      this.happenTime = new Date().getTime(); // 日志发生时间
+      this.webMonitorId = WEB_MONITOR_ID;     // 用于区分应用的唯一标识（一个项目对应一个）
+      this.simpleUrl =  window.location.href.split('?')[0].replace('#', ''); // 页面的url
+      this.customerKey = utils.getCustomerKey(); // 用于区分用户，所对应唯一的标识，清理本地数据后失效
+      this.pageKey = utils.getPageKey();  // 用于区分页面，所对应唯一的标识，每个新页面对应一个值
+      this.deviceName = DEVICE_INFO.deviceName;
+      this.os = DEVICE_INFO.os + (DEVICE_INFO.osVersion ? " " + DEVICE_INFO.osVersion : "");
+      this.browserName = DEVICE_INFO.browserName;
+      this.browserVersion = DEVICE_INFO.browserVersion;
+      // TODO 位置信息, 待处理
+      this.monitorIp = "";  // 用户的IP地址
+      this.country = "china";  // 用户所在国家
+      this.province = "";  // 用户所在省份
+      this.city = "";  // 用户所在城市
+      // 用户自定义信息， 由开发者主动传入， 便于对线上进行准确定位
+      this.userId = USER_INFO.userId;
+      this.firstUserParam = USER_INFO.firstUserParam;
+      this.secondUserParam = USER_INFO.secondUserParam;
+    }
 
-  // JS错误日志，继承于日志基类MonitorBaseInfo
-  function JavaScriptErrorInfo(uploadType, errorMsg, errorStack) {
-    setCommonProperty.apply(this);
-    this.uploadType = uploadType;
-    this.errorMessage = encodeURIComponent(errorMsg);
-    this.errorStack = errorStack;
-    this.browserInfo = BROWSER_INFO;
-  }
-  JavaScriptErrorInfo.prototype = new MonitorBaseInfo();
-复制代码
+    // JS错误日志，继承于日志基类MonitorBaseInfo
+    function JavaScriptErrorInfo(uploadType, errorMsg, errorStack) {
+      setCommonProperty.apply(this);
+      this.uploadType = uploadType;
+      this.errorMessage = encodeURIComponent(errorMsg);
+      this.errorStack = errorStack;
+      this.browserInfo = BROWSER_INFO;
+    }
+    JavaScriptErrorInfo.prototype = new MonitorBaseInfo();
+
 　　封装了一个Js错误对象JavaScriptErrorInfo，用以保存页面中产生的Js错误。其中，setCommonProperty用以设置所有日志对象的通用属性。
 
 　　1）重写window.onerror 方法， 大家熟知，监控JS错误必然离不开它，有人对他进行了测试测试介绍感觉也是比较用心了
@@ -82,58 +81,51 @@
 
 　　3）重写window.onunhandledrejection方法。 当你用到Promise的时候，而你又忘记写reject的捕获方法的时候，系统总是会抛出一个叫 Unhandled Promise rejection. 没有堆栈，没有其他信息，特别是在写fetch请求的时候很容易发生。 所以我们需要重写这个方法，以帮助我们监控此类错误
 
-　　下边是启动JS错误监控代码
+    /**
+    * 页面JS错误监控
+    */
+    function recordJavaScriptError() {
+      // 重写console.error, 可以捕获更全面的报错信息
+      var oldError = console.error;
+      console.error = function () {
+        // arguments的长度为2时，才是error上报的时机
+        // if (arguments.length < 2) return;
+        var errorMsg = arguments[0] && arguments[0].message;
+        var url = WEB_LOCATION;
+        var lineNumber = 0;
+        var columnNumber = 0;
+        var errorObj = arguments[0] && arguments[0].stack;
+        if (!errorObj) errorObj = arguments[0];
+        // 如果onerror重写成功，就无需在这里进行上报了
+        !jsMonitorStarted && siftAndMakeUpMessage(errorMsg, url, lineNumber, columnNumber, errorObj);
+        return oldError.apply(console, arguments);
+      };
+      // 重写 onerror 进行jsError的监听
+      window.onerror = function(errorMsg, url, lineNumber, columnNumber, errorObj)
+      {
+        jsMonitorStarted = true;
+        var errorStack = errorObj ? errorObj.stack : null;
+        siftAndMakeUpMessage(errorMsg, url, lineNumber, columnNumber, errorStack);
+      };
+     function siftAndMakeUpMessage(origin_errorMsg, origin_url, origin_lineNumber, origin_columnNumber, origin_errorObj) {
+       var errorMsg = origin_errorMsg ? origin_errorMsg : '';
+       var errorObj = origin_errorObj ? origin_errorObj : '';
+       var errorType = "";
+       if (errorMsg) {
+         var errorStackStr = JSON.stringify(errorObj)
+         errorType = errorStackStr.split(": ")[0].replace('"', "");
+       }
+       var javaScriptErrorInfo = new JavaScriptErrorInfo(JS_ERROR, errorType + ": " + errorMsg, errorObj);
+       javaScriptErrorInfo.handleLogInfo(JS_ERROR, javaScriptErrorInfo);
+     };
+   };
 
-复制代码
-/**
-   * 页面JS错误监控
-   */
-  function recordJavaScriptError() {
-    // 重写console.error, 可以捕获更全面的报错信息
-    var oldError = console.error;
-    console.error = function () {
-      // arguments的长度为2时，才是error上报的时机
-      // if (arguments.length < 2) return;
-      var errorMsg = arguments[0] && arguments[0].message;
-      var url = WEB_LOCATION;
-      var lineNumber = 0;
-      var columnNumber = 0;
-      var errorObj = arguments[0] && arguments[0].stack;
-      if (!errorObj) errorObj = arguments[0];
-      // 如果onerror重写成功，就无需在这里进行上报了
-      !jsMonitorStarted && siftAndMakeUpMessage(errorMsg, url, lineNumber, columnNumber, errorObj);
-      return oldError.apply(console, arguments);
-    };
-    // 重写 onerror 进行jsError的监听
-    window.onerror = function(errorMsg, url, lineNumber, columnNumber, errorObj)
-    {
-      jsMonitorStarted = true;
-      var errorStack = errorObj ? errorObj.stack : null;
-      siftAndMakeUpMessage(errorMsg, url, lineNumber, columnNumber, errorStack);
-    };
-
-    function siftAndMakeUpMessage(origin_errorMsg, origin_url, origin_lineNumber, origin_columnNumber, origin_errorObj) {
-      var errorMsg = origin_errorMsg ? origin_errorMsg : '';
-      var errorObj = origin_errorObj ? origin_errorObj : '';
-      var errorType = "";
-      if (errorMsg) {
-        var errorStackStr = JSON.stringify(errorObj)
-        errorType = errorStackStr.split(": ")[0].replace('"', "");
-      }
-      var javaScriptErrorInfo = new JavaScriptErrorInfo(JS_ERROR, errorType + ": " + errorMsg, errorObj);
-      javaScriptErrorInfo.handleLogInfo(JS_ERROR, javaScriptErrorInfo);
-    };
-  };
-复制代码
 OK, 错误日志有了，该怎么计算错误率呢？
 
 　　JS错误发生率 = JS错误个数(一次访问页面中，所有的js错误都算一次)/PV (PC，IOS，Android平台同理)
 
 所以我们需要记下页面的PV记录
 
- 
-
-复制代码
     /**
        * 添加一个定时器，进行数据的上传
        * 2秒钟进行一次URL是否变化的检测
@@ -168,15 +160,14 @@ OK, 错误日志有了，该怎么计算错误率呢？
         }
         timeCount ++;
       }, 200);
-复制代码
+
 　　上边的代码我用了定时器，大概的意思是200毫秒进行一次URL变化的检查，5秒进行一次数据的检查，如果有数据就进行上传，并清空上一次的数据。为什么用定时器呢，因为在单页应用中，路由的切换和地址栏的变化是无法被监控的，我确实没有想到特别好的办法来监控，所以用了这种方式。
 
 　　封装简易的Ajax
 
 　　为了将这些数据上传到我们的服务器，我们总不能每次都用xmlHttpRequest来发送ajax请求吧，所以我们需要自己封装一个简单的Ajax
 
-复制代码
-/**
+    /**
      *
      * @param method  请求类型(大写)  GET/POST
      * @param url     请求URL
@@ -198,7 +189,7 @@ OK, 错误日志有了，该怎么计算错误率呢？
       };
       xmlHttp.send("data=" + JSON.stringify(param));
     }
-复制代码
+
 二、JS Error 详细信息解析
 
 
@@ -226,7 +217,7 @@ OK, 错误日志有了，该怎么计算错误率呢？
 
 　　⑤  用户足迹——我个人觉得比较有用，但是代价太高。 因为这个需要记录下用户在页面上的所有行为，需要上传非常多的数据，功能待定。
 
-　　　  这个功能已经在后边进行完善了，点击 查看足迹 按钮即可查出这个用的行为足迹，在定位线上问题方面，有很大的作用 , 我在后边的篇幅中有介绍   搭建前端监控系统（五）怎样定位线上问题
+　　　这个功能已经在后边进行完善了，点击 查看足迹 按钮即可查出这个用的行为足迹，在定位线上问题方面，有很大的作用 , 我在后边的篇幅中有介绍   搭建前端监控系统（五）怎样定位线上问题
 
 　　
 
